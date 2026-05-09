@@ -39,7 +39,6 @@ def predict():
     try:
         data = request.get_json()
 
-        # Required fields
         age                   = int(data.get("age", 60))
         time_in_hospital      = int(data.get("time_in_hospital", 4))
         num_medications       = int(data.get("num_medications", 14))
@@ -49,7 +48,6 @@ def predict():
         a1c_tested            = int(data.get("a1c_tested", 1))
         num_lab_procedures    = int(data.get("num_lab_procedures", 45))
 
-        # Build feature vector from training medians
         features = pd.Series(feature_medians)
         features["age"]                   = age
         features["time_in_hospital"]      = time_in_hospital
@@ -61,27 +59,24 @@ def predict():
         features["complexity_score"]      = num_lab_procedures + num_medications
         features = features.reindex(feature_columns, fill_value=0)
 
-        # Score with Random Forest
         prob = float(rf_model.predict_proba([features])[0][1])
 
-        # Risk tier
         if prob >= HIGH_THRESHOLD:
             tier   = "High Risk"
-            emoji  = "HIGH RISK"
+            label  = "HIGH RISK"
             action = ("Immediate care coordinator follow-up within 24 hours. "
                       "Consider home health referral.")
         elif prob >= MED_THRESHOLD:
             tier   = "Medium Risk"
-            emoji  = "MEDIUM RISK"
+            label  = "MEDIUM RISK"
             action = ("Schedule follow-up call within 72 hours. "
                       "Ensure medication reconciliation at discharge.")
         else:
             tier   = "Low Risk"
-            emoji  = "LOW RISK"
+            label  = "LOW RISK"
             action = ("Standard discharge instructions sufficient. "
                       "Routine 30-day follow-up recommended.")
 
-        # Risk factors
         risk_factors = []
         if age >= 65:
             risk_factors.append(f"Age over 65 ({age} years)")
@@ -104,7 +99,7 @@ def predict():
             "risk_score":         round(prob, 3),
             "risk_score_pct":     f"{round(prob * 100, 1)}%",
             "risk_tier":          tier,
-            "risk_label":         emoji,
+            "risk_label":         label,
             "recommended_action": action,
             "risk_factors":       risk_factors,
             "model_info":         "Random Forest · 100 trees · AUC 0.67"
@@ -112,6 +107,121 @@ def predict():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/openapi.json")
+def openapi_spec():
+    base_url = request.host_url.rstrip("/")
+    return jsonify({
+        "openapi": "3.0.0",
+        "info": {
+            "title": "Readmission Risk Prediction API",
+            "version": "1.0.0",
+            "description": (
+                "Predicts 30-day hospital readmission risk for diabetic "
+                "patients using a Random Forest model trained on 101,766 "
+                "patient encounters from 130 US hospitals."
+            )
+        },
+        "servers": [{"url": base_url}],
+        "paths": {
+            "/predict": {
+                "post": {
+                    "operationId": "predictReadmissionRisk",
+                    "summary": "Score a patient for 30-day readmission risk",
+                    "description": (
+                        "Provide patient variables and receive a real-time "
+                        "readmission risk score from the trained Random Forest model."
+                    ),
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "age", "time_in_hospital",
+                                        "num_medications", "num_prior_visits",
+                                        "insulin_adjusted",
+                                        "primary_diag_diabetes", "a1c_tested"
+                                    ],
+                                    "properties": {
+                                        "age": {
+                                            "type": "integer",
+                                            "description": "Patient age in years"
+                                        },
+                                        "time_in_hospital": {
+                                            "type": "integer",
+                                            "description": "Length of hospital stay in days"
+                                        },
+                                        "num_medications": {
+                                            "type": "integer",
+                                            "description": "Number of medications prescribed"
+                                        },
+                                        "num_prior_visits": {
+                                            "type": "integer",
+                                            "description": "Number of prior inpatient visits in past year"
+                                        },
+                                        "insulin_adjusted": {
+                                            "type": "integer",
+                                            "description": "Was insulin adjusted this admission? 1=Yes 0=No"
+                                        },
+                                        "primary_diag_diabetes": {
+                                            "type": "integer",
+                                            "description": "Is primary diagnosis diabetes-related? 1=Yes 0=No"
+                                        },
+                                        "a1c_tested": {
+                                            "type": "integer",
+                                            "description": "Was A1C tested this admission? 1=Yes 0=No"
+                                        },
+                                        "num_lab_procedures": {
+                                            "type": "integer",
+                                            "description": "Number of lab procedures (optional, defaults to 45)"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Risk assessment result",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "risk_score": {
+                                                "type": "number",
+                                                "description": "Readmission probability (0-1)"
+                                            },
+                                            "risk_score_pct": {
+                                                "type": "string",
+                                                "description": "Risk score as percentage"
+                                            },
+                                            "risk_tier": {
+                                                "type": "string",
+                                                "description": "High Risk / Medium Risk / Low Risk"
+                                            },
+                                            "recommended_action": {
+                                                "type": "string",
+                                                "description": "Recommended clinical action"
+                                            },
+                                            "risk_factors": {
+                                                "type": "array",
+                                                "items": {"type": "string"},
+                                                "description": "Contributing risk factors"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 
 
 if __name__ == "__main__":
